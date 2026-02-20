@@ -606,6 +606,49 @@
                 max-height: 150px;
             }
         }
+        /* 分页样式 */
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 6px;
+            padding: 15px;
+            background: var(--card);
+            border-top: 1px solid var(--border);
+        }
+        .pagination button {
+            padding: 6px 12px;
+            border: 1px solid var(--border);
+            background: white;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            color: var(--text);
+            transition: all 0.2s;
+            min-width: 36px;
+            height: 36px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .pagination button:hover:not(:disabled) {
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+        .pagination button.active {
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
+        }
+        .pagination button:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+        .pagination-info {
+            font-size: 12px;
+            color: var(--text-light);
+            margin: 0 8px;
+        }
         /* 淡入动画 */
         @keyframes fadeIn {
             from { opacity: 0; }
@@ -749,12 +792,17 @@
                     </tr>
                 </tbody>
             </table>
+            <div class="pagination" id="pagination" style="display: none;"></div>
         </div>
     </div>
 
     <script>
         let images = [];
         let pendingFilesToUpload = [];
+        let currentPage = 1;
+        let totalPages = 1;
+        let totalImages = 0;
+        const PAGE_SIZE = 20;
         const API_BASE = '';
 
         // 苹果风格通知函数
@@ -1082,7 +1130,7 @@
                         addThumbnail(result.data);
                         
                         // 刷新图片列表
-                        loadImages();
+                        loadImages('', '', 1);
                         
                         // 3秒后移除进度项
                         setTimeout(() => {
@@ -1174,7 +1222,7 @@
                     
                     urlInput.value = '';
                     addThumbnail(result.data);
-                    loadImages();
+                    loadImages('', '', 1);
                     
                     setTimeout(() => {
                         progressItem.style.transition = 'opacity 0.3s';
@@ -1198,9 +1246,10 @@
             }
         }
 
-        async function loadImages(folder = '', tag = '') {
+        async function loadImages(folder = '', tag = '', page = 1) {
             try {
-                let url = `${API_BASE}/api/images?limit=100`;
+                currentPage = page;
+                let url = `${API_BASE}/api/images?page=${page}&limit=${PAGE_SIZE}`;
                 if (folder) url += `&folder=${folder}`;
                 if (tag) url += `&tag=${tag}`;
 
@@ -1209,7 +1258,12 @@
 
                 if (result.success) {
                     images = result.data;
+                    if (result.pagination) {
+                        totalPages = result.pagination.totalPages;
+                        totalImages = result.pagination.total;
+                    }
                     renderGallery(images);
+                    renderPagination();
                     updateTotalCount();
                 }
             } catch (error) {
@@ -1318,7 +1372,7 @@
 
                 if (result.success) {
                     showToast('删除成功');
-                    loadImages();
+                    loadImages('', '', currentPage);
                 } else {
                     showToast(result.error || '删除失败', 'error');
                 }
@@ -1466,8 +1520,52 @@
         
         // 更新图片总数
         function updateTotalCount() {
-            const count = images.length;
-            document.getElementById('totalCount').textContent = count;
+            document.getElementById('totalCount').textContent = totalImages;
+        }
+
+        // 渲染分页控件
+        function renderPagination() {
+            const container = document.getElementById('pagination');
+            if (totalPages <= 1) {
+                container.style.display = 'none';
+                return;
+            }
+            container.style.display = 'flex';
+
+            let html = '';
+            html += `<button onclick="goToPage(${currentPage - 1})" ${currentPage <= 1 ? 'disabled' : ''}>&lt;</button>`;
+
+            // 计算显示的页码范围
+            let startPage = Math.max(1, currentPage - 2);
+            let endPage = Math.min(totalPages, currentPage + 2);
+            if (endPage - startPage < 4) {
+                if (startPage === 1) endPage = Math.min(totalPages, startPage + 4);
+                else startPage = Math.max(1, endPage - 4);
+            }
+
+            if (startPage > 1) {
+                html += `<button onclick="goToPage(1)">1</button>`;
+                if (startPage > 2) html += `<span class="pagination-info">...</span>`;
+            }
+            for (let i = startPage; i <= endPage; i++) {
+                html += `<button class="${i === currentPage ? 'active' : ''}" onclick="goToPage(${i})">${i}</button>`;
+            }
+            if (endPage < totalPages) {
+                if (endPage < totalPages - 1) html += `<span class="pagination-info">...</span>`;
+                html += `<button onclick="goToPage(${totalPages})">${totalPages}</button>`;
+            }
+
+            html += `<button onclick="goToPage(${currentPage + 1})" ${currentPage >= totalPages ? 'disabled' : ''}>&gt;</button>`;
+            html += `<span class="pagination-info">${currentPage}/${totalPages} 页</span>`;
+
+            container.innerHTML = html;
+        }
+
+        function goToPage(page) {
+            if (page < 1 || page > totalPages || page === currentPage) return;
+            loadImages('', '', page);
+            // 滚动到表格顶部
+            document.getElementById('imageTable').scrollIntoView({ behavior: 'smooth' });
         }
 
         // 搜索功能
