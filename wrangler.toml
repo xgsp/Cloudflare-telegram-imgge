@@ -1,0 +1,18 @@
+name = "telegram-image-bed"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+# KV 命名空间用于存储图片元数据
+# 运行以下命令创建 KV:
+#   wrangler kv:namespace create "IMAGE_DB"
+#   wrangler kv:namespace create "IMAGE_DB" --preview
+# 然后替换下面的 ID
+kv_namespaces = [
+  { binding = "IMAGE_DB", id = "856a4b0b473748d9963600c117cabbfd", preview_id = "fd3914f22d7242ef81e42c4d31bcb1ab" }
+]
+
+# 配置密钥（通过命令行设置，不要写在这里）
+# 步骤：
+# 1. wrangler secret put TG_BOT_TOKEN    (输入你的 Telegram Bot Token)
+# 2. wrangler secret put TG_CHAT_ID      (输入你的 Telegram Chat ID)  
+# 3. wrangler secret put ADMIN_PASSWORD  (可选，设置管理员密码)

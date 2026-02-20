@@ -1,0 +1,22 @@
+{
+  "name": "telegram-image-bed",
+  "version": "1.0.0",
+  "description": "Cloudflare Workers + Telegram 无限空间图床",
+  "main": "src/index.js",
+  "scripts": {
+    "build": "node src/build-worker.js",
+    "dev": "npm run build && wrangler dev",
+    "predeploy": "npm run build",
+    "deploy": "wrangler deploy",
+    "setup": "echo '请按照 SETUP.md 中的说明进行配置'",
+    "test": "vitest --run"
+  },
+  "keywords": ["cloudflare", "telegram", "image-hosting"],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "fast-check": "^3.22.0",
+    "vitest": "^2.1.0",
+    "wrangler": "^3.0.0"
+  }
+}
