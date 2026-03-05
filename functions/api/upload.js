@@ -72,7 +72,8 @@ export async function onRequestPost({ request, env }) {
       }));
 
       const baseUrl = new URL(request.url).origin;
-      const imageUrl = `${baseUrl}/api/image/${id}`;
+      // 在环境变量里加 TELEGRAM_CHANNEL_USERNAME = xxooriji_zipai
+      const imageUrl = `https://t.me/${env.TELEGRAM_CHANNEL_USERNAME}/${msgId}`;
 
       return new Response(JSON.stringify({
         url: imageUrl,
@@ -102,7 +103,8 @@ export async function onRequestPost({ request, env }) {
     }));
 
     const baseUrl = new URL(request.url).origin;
-    const imageUrl = `${baseUrl}/api/image/${id}`;
+    // 在环境变量里加 TELEGRAM_CHANNEL_USERNAME = xxooriji_zipai
+    const imageUrl = `https://t.me/${env.TELEGRAM_CHANNEL_USERNAME}/${msgId}`;
 
     return new Response(JSON.stringify({
       url: imageUrl,
