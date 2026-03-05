@@ -1,135 +1,121 @@
-// 图片上传 API
-
-// 支持的图片 MIME 类型白名单
-export const ALLOWED_TYPES = [
-  'image/jpeg',
-  'image/png',
-  'image/gif',
-  'image/webp',
-  'image/svg+xml',
-  'image/bmp',
-  'image/tiff'
-];
-
-// 文件大小限制：50MB
-export const MAX_FILE_SIZE = 50 * 1024 * 1024;
-
-// 检查文件类型是否在白名单中
-export function isAllowedType(mimeType) {
-  return ALLOWED_TYPES.includes(mimeType);
-}
-
-// 生成唯一 ID
-export function generateId() {
-  return Math.random().toString(36).substring(2, 15);
-}
-
-export async function onRequestPost(context) {
-  const { request, env } = context;
+export async function onRequestPost({ request, env }) {
+  // ✅ 鉴权检查
+  const apiKey = request.headers.get('X-API-Key');
+  if (!apiKey || apiKey !== env.UPLOAD_API_KEY) {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
 
   try {
     const formData = await request.formData();
     const file = formData.get('file');
-    const tags = formData.get('tags') || '';
-    const folder = formData.get('folder') || 'default';
+    const caption = formData.get('caption') || ''; // ✅ 说明文字，可选
 
     if (!file) {
-      return new Response(JSON.stringify({ success: false, error: '没有文件' }), {
+      return new Response(JSON.stringify({ error: 'No file provided' }), {
+        status: 400,
         headers: { 'Content-Type': 'application/json' }
       });
     }
 
-    // 检查文件类型
-    if (!isAllowedType(file.type)) {
-      return new Response(JSON.stringify({ success: false, error: '只支持图片文件（JPEG、PNG、GIF、WebP、SVG、BMP、TIFF）' }), {
-        headers: { 'Content-Type': 'application/json' }
-      });
+    // ✅ 以照片形式上传（sendPhoto），附带说明文字
+    const tgForm = new FormData();
+    tgForm.append('photo', file);
+    if (caption) {
+      tgForm.append('caption', caption);
     }
 
-    // 检查文件大小
-    if (file.size > MAX_FILE_SIZE) {
-      return new Response(JSON.stringify({ success: false, error: '文件大小超过 50MB 限制' }), {
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-
-    // 获取配置
-    const BOT_TOKEN = env.TELEGRAM_BOT_TOKEN;
-    const CHAT_ID = env.TELEGRAM_CHAT_ID;
-
-    if (!BOT_TOKEN || !CHAT_ID) {
-      return new Response(JSON.stringify({ success: false, error: '配置错误：缺少 Bot Token 或 Chat ID' }), {
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-
-    // 上传到 Telegram（使用 sendDocument 避免图片尺寸和大小限制）
-    const telegramFormData = new FormData();
-    telegramFormData.append('chat_id', CHAT_ID);
-    telegramFormData.append('document', file);
-
-    const telegramResponse = await fetch(
-      `https://api.telegram.org/bot${BOT_TOKEN}/sendDocument`,
-      {
-        method: 'POST',
-        body: telegramFormData
-      }
+    const tgRes = await fetch(
+      `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendPhoto?chat_id=${env.TELEGRAM_CHAT_ID}`,
+      { method: 'POST', body: tgForm }
     );
 
-    const telegramResult = await telegramResponse.json();
+    const tgData = await tgRes.json();
 
-    if (!telegramResult.ok) {
-      return new Response(JSON.stringify({ 
-        success: false, 
-        error: 'Telegram 上传失败：' + (telegramResult.description || '未知错误')
+    if (!tgData.ok) {
+      // ✅ 如果照片上传失败（比如格式不支持），自动降级用 sendDocument
+      const tgForm2 = new FormData();
+      tgForm2.append('document', file);
+      if (caption) {
+        tgForm2.append('caption', caption);
+      }
+
+      const tgRes2 = await fetch(
+        `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendDocument?chat_id=${env.TELEGRAM_CHAT_ID}`,
+        { method: 'POST', body: tgForm2 }
+      );
+
+      const tgData2 = await tgRes2.json();
+
+      if (!tgData2.ok) {
+        return new Response(JSON.stringify({ error: 'Telegram upload failed', detail: tgData2 }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      // 用 document 的 file_id
+      const fileId = tgData2.result.document.file_id;
+      const msgId = tgData2.result.message_id;
+      const id = crypto.randomUUID();
+
+      await env.IMAGE_DB.put(id, JSON.stringify({
+        fileId,
+        msgId,
+        name: file.name || id,
+        caption,
+        size: file.size,
+        type: 'document',
+        uploadedAt: Date.now()
+      }));
+
+      const baseUrl = new URL(request.url).origin;
+      const imageUrl = `${baseUrl}/api/image/${id}`;
+
+      return new Response(JSON.stringify({
+        url: imageUrl,
+        markdown: `![image](${imageUrl})`,
+        html: `<img src="${imageUrl}" alt="${caption}">`,
+        bbcode: `[img]${imageUrl}[/img]`
       }), {
+        status: 200,
         headers: { 'Content-Type': 'application/json' }
       });
     }
 
-    // 获取文件信息（从 document 对象提取 file_id）
-    const fileId = telegramResult.result.document.file_id;
-    const messageId = telegramResult.result.message_id;
+    // ✅ 照片上传成功，取最大尺寸
+    const photos = tgData.result.photo;
+    const fileId = photos[photos.length - 1].file_id;
+    const msgId = tgData.result.message_id;
 
-    // 生成唯一 ID
-    const imageId = generateId();
-    const timestamp = Date.now();
-
-    // 构建代理 URL（不暴露 Bot Token）
-    // 自动使用当前请求的域名（支持 pages.dev 和自定义域名）
-    const url = new URL(request.url);
-    const imageUrl = `${url.protocol}//${url.host}/api/image/${imageId}`;
-
-    // 保存到 KV
-    const imageData = {
-      id: imageId,
-      url: imageUrl,
-      filename: file.name,
+    const id = crypto.randomUUID();
+    await env.IMAGE_DB.put(id, JSON.stringify({
+      fileId,
+      msgId,
+      name: file.name || id,
+      caption,
       size: file.size,
-      type: file.type,
-      uploadTime: timestamp,
-      tags: tags ? tags.split(',').map(t => t.trim()) : [],
-      folder: folder,
-      telegram: {
-        fileId: fileId,
-        messageId: messageId
-      }
-    };
+      type: 'photo',
+      uploadedAt: Date.now()
+    }));
 
-    await env.IMAGE_DB.put(imageId, JSON.stringify(imageData));
+    const baseUrl = new URL(request.url).origin;
+    const imageUrl = `${baseUrl}/api/image/${id}`;
 
-    return new Response(JSON.stringify({ 
-      success: true, 
-      data: imageData 
+    return new Response(JSON.stringify({
+      url: imageUrl,
+      markdown: `![image](${imageUrl})`,
+      html: `<img src="${imageUrl}" alt="${caption}">`,
+      bbcode: `[img]${imageUrl}[/img]`
     }), {
+      status: 200,
       headers: { 'Content-Type': 'application/json' }
     });
 
-  } catch (error) {
-    return new Response(JSON.stringify({ 
-      success: false, 
-      error: error.message 
-    }), {
+  } catch (err) {
+    return new Response(JSON.stringify({ error: err.message }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
     });
