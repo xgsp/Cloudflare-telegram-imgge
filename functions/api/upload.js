@@ -31,7 +31,7 @@ export async function onRequestPost({ request, env }) {
 
     // ══ 第2层：魔数校验（读真实文件头）═════════════════════
     const arrayBuffer = await file.arrayBuffer();
-    const bytes = new Uint8Array(arrayBuffer, 0, 16); // 只取前16字节
+    const bytes = new Uint8Array(arrayBuffer, 0, 16);
 
     const realType = detectFileType(bytes);
     if (!realType) {
@@ -40,25 +40,38 @@ export async function onRequestPost({ request, env }) {
       });
     }
 
-    // 声明类型和真实类型必须一致（同类别）
-    const mimeCategory = mimeType.split('/')[0]; // 'image' or 'video'
+    const mimeCategory = mimeType.split('/')[0];
     if (realType !== mimeCategory) {
       return new Response(JSON.stringify({ error: `文件伪装检测：声明为 ${mimeType} 但实际是 ${realType}，拒绝上传` }), {
         status: 400, headers: { 'Content-Type': 'application/json' }
       });
     }
 
-    // ══ 重新构造 File 对象（因为 arrayBuffer 已读取）══════
+    // ══ 重新构造 File 对象 ══════════════════════════════════
     const realFile = new File([arrayBuffer], file.name, { type: mimeType });
     const isVideo = mimeCategory === 'video';
+    const isGif   = mimeType === 'image/gif';
+
+    // ══ 根据类型选择 Telegram 接口 ═════════════════════════
+    let apiMethod = '';
+    let fileField  = '';
+    if (isVideo) {
+      apiMethod = 'sendVideo';
+      fileField  = 'video';
+    } else if (isGif) {
+      // GIF 走 sendAnimation，保持动态效果
+      apiMethod = 'sendAnimation';
+      fileField  = 'animation';
+    } else {
+      apiMethod = 'sendPhoto';
+      fileField  = 'photo';
+    }
 
     const tgForm = new FormData();
-    const apiMethod = isVideo ? 'sendVideo' : 'sendPhoto';
-    const fileField  = isVideo ? 'video'     : 'photo';
     tgForm.append(fileField, realFile);
     if (caption) tgForm.append('caption', caption);
 
-    const tgRes  = await fetch(
+    const tgRes = await fetch(
       `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${apiMethod}?chat_id=${env.TELEGRAM_CHAT_ID}`,
       { method: 'POST', body: tgForm }
     );
@@ -70,11 +83,15 @@ export async function onRequestPost({ request, env }) {
       });
     }
 
+    // ══ 取 file_id ════════════════════════════════════════
     let fileId = '';
     let type   = '';
     if (isVideo) {
       fileId = tgData.result.video.file_id;
       type   = 'video';
+    } else if (isGif) {
+      fileId = tgData.result.animation.file_id;
+      type   = 'photo';
     } else {
       const photos = tgData.result.photo;
       fileId = photos[photos.length - 1].file_id;
@@ -85,11 +102,25 @@ export async function onRequestPost({ request, env }) {
     const id    = crypto.randomUUID();
     await env.IMAGE_DB.put(id, JSON.stringify({
       fileId, msgId, name: file.name || id, caption,
-      size: file.size, type, uploadedAt: Date.now()
+      size: file.size, type,
+      ext: (file.name || '').split('.').pop().toLowerCase(),
+      uploadedAt: Date.now()
     }));
 
     const msgUrl = `https://t.me/${env.TELEGRAM_CHANNEL_USERNAME}/${msgId}`;
-    return new Response(JSON.stringify({ url: msgUrl }), {
+    let returnUrl = msgUrl;
+
+    // 视频 20MB 以内返回代理直链，超过返回 t.me 链接
+    if (isVideo) {
+      const ext = (file.name || '').split('.').pop().toLowerCase();
+      const videoExt = ['mp4', 'mov', 'mkv', 'webm'].includes(ext) ? ext : 'mp4';
+      if (file.size <= 20 * 1024 * 1024) {
+        const baseUrl = new URL(request.url).origin;
+        returnUrl = `${baseUrl}/api/image/${id}.${videoExt}`;
+      }
+    }
+
+    return new Response(JSON.stringify({ url: returnUrl }), {
       status: 200, headers: { 'Content-Type': 'application/json' }
     });
 
@@ -105,7 +136,7 @@ function detectFileType(bytes) {
   // JPEG: FF D8 FF
   if (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) return 'image';
 
-  // PNG: 89 50 4E 47 0D 0A 1A 0A
+  // PNG: 89 50 4E 47
   if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) return 'image';
 
   // GIF: 47 49 46 38
@@ -118,13 +149,12 @@ function detectFileType(bytes) {
   // MP4: ftyp box (offset 4-7)
   if (bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70) return 'video';
 
-  // MOV (QuickTime): 00 00 00 ?? 66 74 79 70 71 74
+  // MOV (QuickTime)
   if (bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70 &&
       bytes[8] === 0x71 && bytes[9] === 0x74) return 'video';
 
   // MKV/WebM: 1A 45 DF A3
   if (bytes[0] === 0x1A && bytes[1] === 0x45 && bytes[2] === 0xDF && bytes[3] === 0xA3) return 'video';
 
-  // 未知格式，拒绝
   return null;
 }
